@@ -832,232 +832,22 @@ void StreamSession::SendFeedbackState()
 
 void StreamSession::InitAudio(unsigned int channels, unsigned int rate)
 {
-	allow_unmute = true;
-	if(start_mic_unmuted)
-		ToggleMute();
-	if(audio_out)
-		SDL_CloseAudioDevice(audio_out);
-
-	SDL_AudioSpec spec = {0};
-	spec.freq = rate;
-	spec.channels = channels;
-	spec.format = AUDIO_S16SYS;
-	audio_out_sample_size = sizeof(int16_t) * channels;
-	spec.samples = audio_buffer_size / audio_out_sample_size;
-
-	SDL_AudioSpec obtained;
-	audio_out = SDL_OpenAudioDevice(audio_out_device_name.isEmpty() ? nullptr : qUtf8Printable(audio_out_device_name), false, &spec, &obtained, false);
-	if(!audio_out)
-	{
-		CHIAKI_LOGE(log.GetChiakiLog(), "Failed to open Audio Output Device '%s': %s", qPrintable(audio_out_device_name), SDL_GetError());
-		if(audio_out_device_name.isEmpty())
-			return;
-		audio_out_device_name.clear();
-		audio_out = SDL_OpenAudioDevice(nullptr, false, &spec, &obtained, false);
-		if(!audio_out)
-		{
-			CHIAKI_LOGE(log.GetChiakiLog(), "Failed to open default Audio Output Device: %s", SDL_GetError());
-			return;
-		}
-	}
-	if(audio_out_device_name.isEmpty())
-		audio_out_device_name = "Auto";
-
-	audio_out_drain_queue = false;
-
-	SDL_PauseAudioDevice(audio_out, 0);
-
-	CHIAKI_LOGI(log.GetChiakiLog(), "Audio Device '%s' opened with %u channels @ %d Hz, buffer size %u",
-				qPrintable(audio_out_device_name), obtained.channels, obtained.freq, obtained.size);
+	// MODIFICADO: Audio de saida desativado - apenas controle funciona
+	allow_unmute = false;
+	CHIAKI_LOGI(log.GetChiakiLog(), "Audio output disabled (controller-only mode)");
 }
 
 void StreamSession::InitMic(unsigned int channels, unsigned int rate)
 {
-	if(audio_in)
-		SDL_CloseAudioDevice(audio_in);
-
-	mic_buf.buf = nullptr;
-#if CHIAKI_GUI_ENABLE_SPEEX
-	mic_resampler_buf = nullptr;
-	echo_resampler_buf = nullptr;
-#endif
-
-	mic_buf.current_byte = 0;
-	int16_t mic_buf_size = channels * MICROPHONE_SAMPLES;
-	mic_buf.size_bytes = mic_buf_size * sizeof(int16_t);
-	mic_buf.buf = (int16_t*) calloc(mic_buf_size, sizeof(int16_t));
-	if(!mic_buf.buf)
-	{
-		CHIAKI_LOGE(GetChiakiLog(), "Could not allocate memory for mic buf, aborting mic startup");
-		return;
-	}
-
-#if CHIAKI_GUI_ENABLE_SPEEX
-	if(speech_processing_enabled)
-	{
-		SDL_AudioCVT cvt;
-		SDL_BuildAudioCVT(&cvt, AUDIO_S16LSB, 1, 48000, AUDIO_S16LSB, 2, 48000);
-		cvt.len = mic_buf.size_bytes;
-		mic_resampler_buf = (uint8_t*) calloc(cvt.len * cvt.len_mult, sizeof(uint8_t));
-		if(!mic_resampler_buf)
-		{
-			CHIAKI_LOGE(GetChiakiLog(), "Mic resampler buf could not be created, aborting mic startup");
-			return;
-		}
-
-		SDL_AudioCVT cvt2;
-		SDL_BuildAudioCVT(&cvt2, AUDIO_S16LSB, 2, 48000, AUDIO_S16LSB, 1, 48000);
-		cvt2.len = cvt.len * cvt.len_ratio;
-		echo_resampler_buf = (uint8_t*) calloc(cvt2.len * cvt2.len_mult, sizeof(uint8_t));
-		if(!echo_resampler_buf)
-		{
-			CHIAKI_LOGE(GetChiakiLog(), "Echo resampler buf could not be created, aborting mic startup");
-			return;
-		}
-	}
-#endif
-
-	SDL_AudioSpec spec = {0};
-	spec.freq = rate;
-	spec.channels = channels;
-	spec.format = AUDIO_S16SYS;
-	spec.samples = audio_buffer_size / 4;
-	spec.callback = [](void *userdata, Uint8 *stream, int len) {
-		auto s = static_cast<StreamSession*>(userdata);
-		QByteArray data(reinterpret_cast<char*>(stream), len);
-		QMetaObject::invokeMethod(s, std::bind(&StreamSession::ReadMic, s, data));
-	};
-	spec.userdata = this;
-
-	SDL_AudioSpec obtained;
-	audio_in = SDL_OpenAudioDevice(audio_in_device_name.isEmpty() ? nullptr : qUtf8Printable(audio_in_device_name), true, &spec, &obtained, false);
-	if(!audio_in)
-	{
-		CHIAKI_LOGE(log.GetChiakiLog(), "Failed to open Microphone '%s': %s", qPrintable(audio_in_device_name), SDL_GetError());
-		if(audio_in_device_name.isEmpty())
-			return;
-		audio_in_device_name.clear();
-		audio_in = SDL_OpenAudioDevice(nullptr, true, &spec, &obtained, false);
-		if(!audio_in)
-		{
-			CHIAKI_LOGE(log.GetChiakiLog(), "Failed to open default Microphone: %s", SDL_GetError());
-			return;
-		}
-	}
-
-	if(audio_in_device_name.isEmpty())
-		audio_in_device_name = "Auto";
-
-	CHIAKI_LOGI(log.GetChiakiLog(), "Microphone '%s' opened with %u channels @ %u Hz, buffer size %u",
-			qPrintable(audio_in_device_name), obtained.channels, obtained.freq, obtained.size);
+	// MODIFICADO: Microfone desativado - apenas controle funciona
+	CHIAKI_LOGI(log.GetChiakiLog(), "Microphone disabled (controller-only mode)");
 }
 
 void StreamSession::ReadMic(const QByteArray &micdata)
 {
-#if CHIAKI_GUI_ENABLE_SPEEX
-	int16_t echo_buf[mic_buf.size_bytes / sizeof(int16_t)];
-#endif
-	uint32_t mic_bytes_left = mic_buf.size_bytes - mic_buf.current_byte;
-	// Don't send mic data if muted
-	if(muted)
-		return;
-	qint64 bytes_read = micdata.size();
-	const char * micdataread = micdata.constData();
-	if(bytes_read == 0)
-		return;
-	if(bytes_read < mic_bytes_left)
-	{
-		memcpy((uint8_t *)mic_buf.buf + mic_buf.current_byte, (uint8_t *)micdataread, bytes_read);
-		mic_buf.current_byte += bytes_read;
-	}
-	else
-	{
-		memcpy((uint8_t *)mic_buf.buf + mic_buf.current_byte, (uint8_t *)micdataread, mic_bytes_left);
-#if CHIAKI_GUI_ENABLE_SPEEX
-		SDL_AudioCVT cvt;
-		if(speech_processing_enabled)
-		{
-			// change samples to stereo after processing with SPEEX
-			SDL_BuildAudioCVT(&cvt, AUDIO_S16LSB, 1, 48000, AUDIO_S16LSB, 2, 48000);
-			cvt.len = mic_buf.size_bytes;
-			cvt.buf = mic_resampler_buf;
-			if(!echo_to_cancel.isEmpty())
-			{
-				int16_t *echo = echo_to_cancel.dequeue();
-				speex_echo_cancellation(echo_state, mic_buf.buf, echo, echo_buf);
-				speex_preprocess_run(preprocess_state, echo_buf);
-				memcpy((uint8_t *)mic_resampler_buf, (uint8_t *)echo_buf, mic_buf.size_bytes);
-				if(SDL_ConvertAudio(&cvt) != 0)
-				{
-					CHIAKI_LOGE(log.GetChiakiLog(), "Failed to resample mic audio: %s", SDL_GetError());
-					return;
-				}
-				chiaki_opus_encoder_frame((int16_t *)mic_resampler_buf, &opus_encoder);
-			}
-			else
-			{
-				memcpy((uint8_t *)mic_buf.buf, (uint8_t *)mic_buf.buf, mic_buf.size_bytes);
-				speex_preprocess_run(preprocess_state, (int16_t *)mic_buf.buf);
-				memcpy((uint8_t *)mic_resampler_buf, (uint8_t *)mic_buf.buf, mic_buf.size_bytes);
-				if(SDL_ConvertAudio(&cvt) != 0)
-				{
-					CHIAKI_LOGE(log.GetChiakiLog(), "Failed to resample mic audio: %s", SDL_GetError());
-					return;
-				}
-				chiaki_opus_encoder_frame((int16_t *)mic_resampler_buf, &opus_encoder);
-			}
-		}
-		else
-			chiaki_opus_encoder_frame(mic_buf.buf, &opus_encoder);
-#else
-	    chiaki_opus_encoder_frame(mic_buf.buf, &opus_encoder);
-#endif
-		bytes_read -= mic_bytes_left;
-		uint32_t frames = bytes_read / mic_buf.size_bytes;
-		for (int i = 0; i < frames; i++)
-		{
-			memcpy((uint8_t *)mic_buf.buf, (uint8_t *)micdataread + mic_bytes_left + i * mic_buf.size_bytes, mic_buf.size_bytes);
-#if CHIAKI_GUI_ENABLE_SPEEX
-		if(speech_processing_enabled)
-		{
-			if(!echo_to_cancel.isEmpty())
-			{
-				int16_t *echo = echo_to_cancel.dequeue();
-				speex_echo_cancellation(echo_state, mic_buf.buf, echo, echo_buf);
-				speex_preprocess_run(preprocess_state, echo_buf);
-				memcpy((uint8_t *)mic_resampler_buf, (uint8_t *)echo_buf, mic_buf.size_bytes);
-				if(SDL_ConvertAudio(&cvt) != 0)
-				{
-					CHIAKI_LOGE(log.GetChiakiLog(), "Failed to resample mic audio: %s", SDL_GetError());
-					return;
-				}
-				chiaki_opus_encoder_frame((int16_t *)mic_resampler_buf, &opus_encoder);
-			}
-			else
-			{
-				memcpy((uint8_t *)mic_buf.buf, (uint8_t *)mic_buf.buf, mic_buf.size_bytes);
-				speex_preprocess_run(preprocess_state, (int16_t *)mic_buf.buf);
-				memcpy((uint8_t *)mic_resampler_buf, (uint8_t *)mic_buf.buf, mic_buf.size_bytes);
-				if(SDL_ConvertAudio(&cvt) != 0)
-				{
-					CHIAKI_LOGE(log.GetChiakiLog(), "Failed to resample mic audio: %s", SDL_GetError());
-					return;
-				}
-				chiaki_opus_encoder_frame((int16_t *)mic_resampler_buf, &opus_encoder);
-			}
-		}
-		else
-			chiaki_opus_encoder_frame(mic_buf.buf, &opus_encoder);
-#else
-	    chiaki_opus_encoder_frame(mic_buf.buf, &opus_encoder);
-#endif
-		}
-		mic_buf.current_byte = bytes_read % mic_buf.size_bytes;
-		if(mic_buf.current_byte == 0)
-			return;
-		memcpy((uint8_t *)mic_buf.buf, (uint8_t *)micdataread + mic_bytes_left + frames * mic_buf.size_bytes, mic_buf.current_byte);
-	}
+	// MODIFICADO: Microfone desativado - nao processa dados de mic
 }
+
 void StreamSession::InitHaptics()
 {
 	haptics_output = 0;
@@ -1066,27 +856,6 @@ void StreamSession::InitHaptics()
 	sdeck_haptics_senderl = nullptr;
 #endif
 	haptics_resampler_buf = nullptr;
-#ifdef Q_OS_LINUX
-	// Haptics work most reliably with Pipewire, so try to use that if available
-	SDL_SetHint("SDL_AUDIODRIVER", "pipewire");
-#endif
-
-#ifdef Q_OS_LINUX
-	if (!strstr(SDL_GetCurrentAudioDriver(), "pipewire"))
-	{
-		CHIAKI_LOGW(
-			log.GetChiakiLog(),
-			"Haptics output is not using Pipewire, this may not work reliably. (was: '%s')",
-			SDL_GetCurrentAudioDriver());
-	}
-#endif
-
-	SDL_AudioCVT cvt;
-	SDL_BuildAudioCVT(&cvt, AUDIO_S16LSB, 4, 3000, AUDIO_S16LSB, 4, 48000);
-	cvt.len = 240;  // 10 16bit stereo samples
-	haptics_resampler_buf = (uint8_t*) calloc(cvt.len * cvt.len_mult, sizeof(uint8_t));
-	if(!haptics_resampler_buf)
-		CHIAKI_LOGE(log.GetChiakiLog(),"Haptics resampler buf could not be allocated");
 }
 
 void StreamSession::DisconnectHaptics()
@@ -1100,341 +869,41 @@ void StreamSession::DisconnectHaptics()
 
 void StreamSession::ConnectHaptics()
 {
-	if (this->haptics_output > 0)
-	{
-		CHIAKI_LOGW(this->log.GetChiakiLog(), "Haptics already connected to an attached DualSense controller, ignoring additional controllers.");
-		return;
-	}
-	if (!haptics_resampler_buf)
-	{
-		CHIAKI_LOGW(this->log.GetChiakiLog(), "Haptics resampler buf wasn't allocated, can't use haptics.");
-		return;
-	}
-#ifdef Q_OS_MACOS
-	CHIAKI_LOGW(this->log.GetChiakiLog(), "If haptics aren't working, please configure your DualSense audio device as quadrophonic in Applications/Utitilities/Audio Midi Setup on your Mac");
-#endif
-	SDL_AudioSpec want, have;
-	SDL_zero(want);
-	want.freq = 48000;
-	want.format = AUDIO_S16LSB;
-	want.channels = 4;
-	want.samples = 480; // 10ms buffer
-	want.callback = NULL;
-
-	const char *device_name = nullptr;
-	for (int i=0; i < SDL_GetNumAudioDevices(0); i++)
-	{
-		device_name = SDL_GetAudioDeviceName(i, 0);
-		if (!device_name || !strstr(device_name, DUALSENSE_AUDIO_DEVICE_NEEDLE))
-		{
-			continue;
-		}
-		haptics_output = SDL_OpenAudioDevice(device_name, 0, &want, &have, 0);
-		if (haptics_output == 0)
-		{
-			CHIAKI_LOGE(log.GetChiakiLog(), "Could not open SDL Audio Device %s for haptics output: %s", device_name, SDL_GetError());
-			continue;
-		}
-		SDL_PauseAudioDevice(haptics_output, 0);
-		CHIAKI_LOGI(log.GetChiakiLog(), "Haptics Audio Device '%s' opened with %d channels @ %d Hz, buffer size %u (driver=%s)", device_name, have.channels, have.freq, have.size, SDL_GetCurrentAudioDriver());
-		return;
-	}
-	CHIAKI_LOGW(log.GetChiakiLog(), "DualSense features were enabled and a DualSense is connected, but could not find the DualSense audio device!");
-	return;
+	// MODIFICADO: Haptics desativados - apenas controle funciona
+	CHIAKI_LOGI(log.GetChiakiLog(), "Haptics disabled (controller-only mode)");
 }
 
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 void StreamSession::ConnectSdeckHaptics()
 {
-	if(!enable_steamdeck_haptics)
-		return;
-	sdeck_last_haptic = chiaki_time_now_monotonic_ms();
-	const int num_channels = 2; // Left and right haptics
-	const uint32_t samples_per_packet = 120 * sizeof(uint8_t) / (2.0 * sizeof(int16_t));
-	sdeck_queue_segment = samples_per_packet * STEAMDECK_HAPTIC_PACKETS_PER_ANALYSIS;
-	if (sdeck_haptic_init(sdeck, sdeck_queue_segment) < 0)
-	{
-		CHIAKI_LOGE(log.GetChiakiLog(), "Steam Deck Haptics Audio could not be connected :(");
-		return;
-	}
-	CHIAKI_LOGI(log.GetChiakiLog(), "Steam Deck Haptics Audio opened with %d channels @ %d Hz with %u samples per audio analysis.", num_channels, STEAMDECK_HAPTIC_SAMPLING_RATE, sdeck_queue_segment);
-	sdeck_hapticl = {};
-	sdeck_hapticl.reserve(20);
-	sdeck_hapticr = {};
-	sdeck_hapticr.reserve(20);
-	sdeck_skipl = false;
-	sdeck_skipr = false;
-	sdeck_haptics_senderl = (int16_t *) calloc(sdeck_queue_segment, sizeof(uint16_t));
-	if(!sdeck_haptics_senderl)
-	{
-		CHIAKI_LOGE(log.GetChiakiLog(), "Steam Deck Haptics senderl buf could not be allocated :(");
-	}
-	sdeck_haptics_senderr = (int16_t *) calloc(sdeck_queue_segment, sizeof(uint16_t));
-	if(!sdeck_haptics_senderr)
-	{
-		CHIAKI_LOGE(log.GetChiakiLog(), "Steam Deck Haptics senderr buf could not be allocated :(");
-	}
-	qRegisterMetaType<haptic_packet_t>();
-	connect(this, &StreamSession::SdeckHapticPushed, this, &StreamSession::SdeckQueueHaptics);
-	auto sdeck_haptic_interval = STEAMDECK_HAPTIC_PACKETS_PER_ANALYSIS * 10;
-	auto sdeck_haptic_timer = new QTimer(this);
-	connect(sdeck_haptic_timer, &QTimer::timeout, this, [this]{
-		haptic_packet_t haptic_packetl = {}, haptic_packetr = {};
-		bool changedl = false, changedr = false;
-		for(uint64_t i = 0; i < STEAMDECK_HAPTIC_PACKETS_PER_ANALYSIS; i++)
-		{
-			uint64_t current_tick = sdeck_last_haptic + i * 10; // 10ms packet
-			if(!sdeck_hapticl.isEmpty())
-			{
-				uint64_t next_timestamp = sdeck_hapticl.head().timestamp;
-				if(next_timestamp > (current_tick + 10))
-				{
-					memset(sdeck_haptics_senderl + 30 * i, 0, 30);
-					continue;
-				}
-				else
-				{
-					haptic_packetl = sdeck_hapticl.dequeue();
-					memcpy(sdeck_haptics_senderl + 30 * i, haptic_packetl.haptic_packet, 30);
-					changedl = true;
-				}
-			}
-			else
-				memset(sdeck_haptics_senderl + 30 * i, 0, 30);
-
-			if(!sdeck_hapticr.isEmpty())
-			{
-				uint64_t next_timestamp = sdeck_hapticr.head().timestamp;
-				if(next_timestamp > (current_tick + 10))
-				{
-					memset(sdeck_haptics_senderr + 30 * i, 0, 30);
-					continue;
-				}
-				else
-				{
-					haptic_packetr = sdeck_hapticr.dequeue();
-					memcpy(sdeck_haptics_senderr + 30 * i, haptic_packetr.haptic_packet, 30);
-					changedr = true;
-				}
-			}
-			else
-				memset(sdeck_haptics_senderr + 30 * i, 0, 30);
-		}
-
-		if(!changedl || sdeck_skipl)
-			sdeck_skipl = false;
-		else
-		{
-			int intervals = play_pcm_haptic(sdeck, TRACKPAD_LEFT, sdeck_haptics_senderl, sdeck_queue_segment, STEAMDECK_HAPTIC_SAMPLING_RATE);
-			if (intervals < 0)
-				CHIAKI_LOGE(log.GetChiakiLog(), "Failed to submit haptics audio to SteamDeck");
-			else if (intervals == 2)
-				sdeck_skipl = true;
-		}
-		if(!changedr || sdeck_skipr)
-			sdeck_skipr = false;
-		else
-		{
-			int intervals = play_pcm_haptic(sdeck, TRACKPAD_RIGHT, sdeck_haptics_senderr, sdeck_queue_segment, STEAMDECK_HAPTIC_SAMPLING_RATE);
-			if (intervals < 0)
-				CHIAKI_LOGE(log.GetChiakiLog(), "Failed to submit haptics audio to SteamDeck");
-			else if (intervals == 2)
-				sdeck_skipr = true;
-		}
-		sdeck_last_haptic = chiaki_time_now_monotonic_ms();
-	});
-	sdeck_haptic_timer->start(sdeck_haptic_interval);
-	return;
+	// MODIFICADO: Steam Deck haptics desativados - apenas controle funciona
+	CHIAKI_LOGI(log.GetChiakiLog(), "Steam Deck haptics disabled (controller-only mode)");
 }
 #endif
 
 void StreamSession::PushAudioFrame(int16_t *buf, size_t samples_count)
 {
-	if(!audio_out)
-		return;
-
-	// qDebug() << "Audio queue" << (SDL_GetQueuedAudioSize(audio_out) / audio_out_sample_size / samples_count) * 10 << "ms";
-
-	// Start draining queue when the latency gets too high
-	if(SDL_GetQueuedAudioSize(audio_out) > 3 * audio_buffer_size)
-		audio_out_drain_queue = true;
-
-	if(audio_out_drain_queue)
-	{
-		// Stop when the queue is smaller than configured buffer size
-		if(SDL_GetQueuedAudioSize(audio_out) >= audio_buffer_size)
-			return;
-		audio_out_drain_queue = false;
-	}
-
-#if CHIAKI_GUI_ENABLE_SPEEX
-	// change samples to mono for processing with SPEEX
-	if(echo_resampler_buf && speech_processing_enabled && !muted)
-	{
-		SDL_AudioCVT cvt;
-		SDL_BuildAudioCVT(&cvt, AUDIO_S16LSB, 2, 48000, AUDIO_S16LSB, 1, 48000);
-		cvt.len = mic_buf.size_bytes * 2;
-		cvt.buf = echo_resampler_buf;
-		memcpy(echo_resampler_buf, buf, mic_buf.size_bytes * 2);
-		if(SDL_ConvertAudio(&cvt) != 0)
-		{
-			CHIAKI_LOGE(log.GetChiakiLog(), "Failed to resample echo audio: %s", SDL_GetError());
-			return;
-		}
-		if(echo_to_cancel.size() >= ECHO_QUEUE_MAX)
-			echo_to_cancel.dequeue();
-		echo_to_cancel.enqueue((int16_t *)echo_resampler_buf);
-	}
-#endif
-	SDL_QueueAudio(audio_out, buf, samples_count * audio_out_sample_size);
+	// MODIFICADO: Audio de saida desativado - apenas controle funciona
+	// Descarta todos os frames de audio recebidos
 }
 
 #ifdef Q_OS_MACOS
 void StreamSession::SetMicAuthorization(Authorization authorization)
 {
-	switch(authorization)
-	{
-		case AUTHORIZED:
-			mic_authorization = true;
-			ToggleMute();
-			break;
-		case DENIED:
-			CHIAKI_LOGE(GetChiakiLog(), "You have denied mic access. Please manually enable mic access in your System Preferences.");
-			break;
-		case RESTRICTED:
-			CHIAKI_LOGE(GetChiakiLog(), "Access to the microphone is restricted. Please change your parental controls to allow enabling mic access if desired.");
-			break;
-	}
+	// MODIFICADO: Microfone desativado - nao faz nada
 }
 #endif
 
 void StreamSession::PushHapticsFrame(uint8_t *buf, size_t buf_size)
 {
-#if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
-	if(sdeck && haptics_handheld > 0 && enable_steamdeck_haptics)
-	{
-		if(buf_size != 120)
-		{
-			CHIAKI_LOGE(log.GetChiakiLog(), "Haptic audio of incompatible size: %u", buf_size);
-			return;
-		}
-		int16_t amplitudel = 0, amplituder = 0;
-		const size_t sample_size = 2 * sizeof(int16_t); // stereo samples
-		haptic_packet_t packetl = {0}, packetr = {0};
-		uint64_t timestamp = chiaki_time_now_monotonic_ms();
-		packetl.timestamp = timestamp;
-		packetr.timestamp = timestamp;
-		size_t buf_count = buf_size / sample_size;
-		for (size_t i = 0; i < buf_count; i++)
-		{
-			size_t cur = i * sample_size;
-			memcpy(&amplitudel, buf + cur, sizeof(int16_t));
-			packetl.haptic_packet[i] = amplitudel;
-			memcpy(&amplituder, buf + cur + sizeof(int16_t), sizeof(int16_t));
-			packetr.haptic_packet[i] = amplituder;
-		}
-		emit SdeckHapticPushed(packetl, packetr);
-		return;
-	}
-#endif
-	if((rumble_haptics_intensity != RumbleHapticsIntensity::Off) && haptics_output == 0)
-	{
-		int16_t amplitudel = 0, amplituder = 0;
-		int32_t suml = 0, sumr = 0;
-		const size_t sample_size = 2 * sizeof(int16_t); // stereo samples
-
-		size_t buf_count = buf_size / sample_size;
-		for (size_t i = 0; i < buf_count; i++){
-			size_t cur = i * sample_size;
-
-			memcpy(&amplitudel, buf + cur, sizeof(int16_t));
-			memcpy(&amplituder, buf + cur + sizeof(int16_t), sizeof(int16_t));
-			suml += amplitudel;
-			sumr += amplituder;
-		}
-		uint16_t left = 0, right = 0;
-		left = suml / buf_count;
-		right = sumr / buf_count;
-		uint32_t temp_left = 0;
-		uint32_t temp_right = 0;
-		switch(rumble_haptics_intensity)
-		{
-			case RumbleHapticsIntensity::VeryWeak:
-				left /= 50;
-				right /= 50;
-				break;
-			case RumbleHapticsIntensity::Weak:
-				left /=25;
-				right /=25;
-				break;
-			case RumbleHapticsIntensity::Normal:
-				break;
-			case RumbleHapticsIntensity::Strong:
-				temp_left = left * 1.5;
-				temp_right = right * 1.5;
-				if(temp_left > UINT16_MAX)
-					temp_left = UINT16_MAX;
-				if(temp_right > UINT16_MAX)
-					temp_right = UINT16_MAX;
-				left = temp_left;
-				right = temp_right;
-				break;
-			case RumbleHapticsIntensity::VeryStrong:
-				temp_left = left * 2;
-				temp_right = right * 2;
-				if(temp_left > UINT16_MAX)
-					temp_left = UINT16_MAX;
-				if(temp_right > UINT16_MAX)
-					temp_right = UINT16_MAX;
-				left = temp_left;
-				right = temp_right;
-				break;
-		}
-		QMetaObject::invokeMethod(this, [this, left, right]() {
-			for(auto controller : controllers)
-			{
-				if(haptics_handheld < 1 && controller->IsHandheld())
-					continue;
-				if(left > right)
-					controller->SetHapticRumble(left, left, 10);
-				else
-					controller->SetHapticRumble(right, right, 10);
-			}
-		});
-		return;
-	}
-	if(haptics_output == 0)
-		return;
-	SDL_AudioCVT cvt;
-	// Haptics samples are coming in at 3KHZ, but the DualSense expects 48KHZ
-	SDL_BuildAudioCVT(&cvt, AUDIO_S16LSB, 4, 3000, AUDIO_S16LSB, 4, 48000);
-	cvt.len = buf_size * 2;
-	cvt.buf = haptics_resampler_buf;
-	// Remix to 4 channels
-	for (int i=0; i < buf_size; i+=4)
-	{
-		SDL_memset(haptics_resampler_buf + i * 2, 0, 4);
-		SDL_memcpy(haptics_resampler_buf + (i * 2) + 4, buf + i, 4);
-	}
-	// Resample to 48kHZ
-	if (SDL_ConvertAudio(&cvt) != 0)
-	{
-		CHIAKI_LOGE(log.GetChiakiLog(), "Failed to resample haptics audio: %s", SDL_GetError());
-		return;
-	}
-
-	if (SDL_QueueAudio(haptics_output, cvt.buf, cvt.len_cvt) < 0)
-	{
-		CHIAKI_LOGE(log.GetChiakiLog(), "Failed to submit haptics audio to device: %s", SDL_GetError());
-		return;
-	}
+	// MODIFICADO: Haptics desativados - apenas controle funciona
+	// Descarta todos os frames de haptics recebidos
 }
 
 #if CHIAKI_GUI_ENABLE_STEAMDECK_NATIVE
 void StreamSession::SdeckQueueHaptics(haptic_packet_t packetl, haptic_packet_t packetr)
 {
-	sdeck_hapticl.enqueue(packetl);
-	sdeck_hapticr.enqueue(packetr);
+	// MODIFICADO: Steam Deck haptics desativados
 }
 #endif
 
@@ -1713,7 +1182,8 @@ void StreamSession::CancelPsnConnection(bool stop_thread)
 
 void StreamSession::TriggerFfmpegFrameAvailable()
 {
-	emit FfmpegFrameAvailable();
+	// MODIFICADO: Video desativado - nao emite sinal de frame disponivel
+	// Apenas atualiza o bitrate medido para monitoramento
 	if(measured_bitrate != session.stream_connection.measured_bitrate)
 	{
 		measured_bitrate = session.stream_connection.measured_bitrate;
@@ -1806,6 +1276,6 @@ static void SessionSDeckCb(SDeckEvent *event, void *user)
 
 static void FfmpegFrameCb(ChiakiFfmpegDecoder *decoder, void *user)
 {
-	auto session = reinterpret_cast<StreamSession *>(user);
-	StreamSessionPrivate::TriggerFfmpegFrameAvailable(session);
+	// MODIFICADO: Video desativado - nao processa frames de video
+	// O decoder recebe os dados mas nao sinaliza para a UI renderizar
 }
